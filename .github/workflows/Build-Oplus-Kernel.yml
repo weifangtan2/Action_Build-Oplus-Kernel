@@ -3,7 +3,7 @@ name: Build Oplus Kernel # 构建一加内核
 on:
   workflow_dispatch:
     inputs:
-      SoC:
+      SOC:
         description: "芯片型号 // SoC to build"
         required: true
         default: 'sm8750'
@@ -18,16 +18,6 @@ on:
           - oneplus_ace5_pro_v
           - oneplus_sm8750_v
         default: oneplus_13_v
-
-      Chipset:
-        description: "开发板代号 // Chipset codename"
-        required: true
-        default: 'sun'
-
-      VERSION:
-        description: "版本格式 // Format: android15-6.6 [Android版本-内核版本]"
-        required: true
-        default: 'android15-6.6'
 
       KSU_CONFIG:
         description: "选择 KernelSU 配置 // Select KernelSU configuration"
@@ -70,13 +60,32 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Parse VERSION input # 解析 VERSION 输入
+      - name: Parse SOC → Set ANDROID_VERSION, KERNEL_VERSION, CHIPSET # 解析 VERSION, KERNEL_VERSION, CHIPSET 输入
         run: |
-          VERSION=$(echo "${{ github.event.inputs.VERSION }}")
-          ANDROID_VERSION=$(echo "$VERSION" | cut -d'-' -f1)
-          KERNEL_VERSION=$(echo "$VERSION" | cut -d'-' -f2)
+          SOC="${{ github.event.inputs.SOC }}"
+          echo "SOC=$SOC" >> $GITHUB_ENV
+
+          # 根据 SOC 映射 ANDROID_VERSION,KERNEL_VERSION,CHIPSET
+          case "$SOC" in
+            sm8750)
+              ANDROID_VERSION="android15"
+              KERNEL_VERSION="6.6"
+              CHIPSET="sun"
+              ;;
+            sm8650|sm7675)
+              ANDROID_VERSION="android14"
+              KERNEL_VERSION="6.1"
+              CHIPSET="pineapple"
+              ;;
+            *)
+              echo "Unknown SOC: $SOC"
+              exit 1
+              ;;
+          esac
+
           echo "ANDROID_VERSION=$ANDROID_VERSION" >> $GITHUB_ENV
           echo "KERNEL_VERSION=$KERNEL_VERSION" >> $GITHUB_ENV
+          echo "CHIPSET=$CHIPSET" >> $GITHUB_ENV
 
       - name: Parse Device Name # 解析机型名称
         run: |
@@ -146,7 +155,7 @@ jobs:
       - name: Initialize repo and sync # 初始化 repo 和同步
         run: |
           mkdir "$WORKSPACE" && cd "$WORKSPACE"
-          repo init -u https://github.com/schqiushui/kernel_manifest.git -b refs/heads/oneplus/${{ inputs.SoC }} -m ${{ inputs.FILE }}.xml --depth=1 || { echo "repo init 失败"; exit 1; }
+          repo init -u https://github.com/schqiushui/kernel_manifest.git -b refs/heads/oneplus/${{ inputs.SOC }} -m ${{ inputs.FILE }}.xml --depth=1 || { echo "repo init 失败"; exit 1; }
           repo sync -c -j$(nproc --all) --no-tags || { echo "repo sync 失败"; exit 1; }
           git clone https://gitlab.com/kei-space/clang/r522817.git $PLATFORM/prebuilts/clang/host/linux-x86/clang-r522817
 
@@ -269,12 +278,12 @@ jobs:
           cd "$WORKSPACE"
 
           BUILD_TYPE="gki"
-          if [ "${{ inputs.Chipset }}" == "sun" ]; then
+          if [ "$CHIPSET" == "sun" ]; then
             BUILD_TYPE="perf"
           fi
 
           echo "开始构建内核，构建类型：$BUILD_TYPE"
-          LTO=thin ./kernel_platform/oplus/build/oplus_build_kernel.sh ${{ inputs.Chipset }} "$BUILD_TYPE" --jobs=$(nproc --all) || { echo "内核构建失败"; exit 1; }
+          LTO=thin ./kernel_platform/oplus/build/oplus_build_kernel.sh "$CHIPSET" "$BUILD_TYPE" --jobs=$(nproc --all) || { echo "内核构建失败"; exit 1; }
 
       - name: Make AnyKernel3 # 制作 AnyKernel3
         run: |
@@ -359,14 +368,14 @@ jobs:
           body: |
             OnePlus Kernel Release
             - Device 机型: `${{ env.BRAND }} ${{ env.MODEL }}`
-            - SoC 型号: `${{ inputs.SoC }}`
-            - Chipset 代号: `${{ inputs.Chipset }}`
+            - SoC 型号: `${{ inputs.SOC }}`
+            - Chipset 代号: `${{ env.CHIPSET }}`
             - KernelSU 类型: `${{ env.KSU_TYPE }}`
             - Branch 版本: `${{ env.KSUVER }}`
             - SUSFS 补丁: `${{ inputs.SUSFS }}`
             - VFS 补丁: `${{ inputs.VFS }}`
             - KPM 补丁: `${{ inputs.KPM }}`
-            - Kernel 版本: `${{ inputs.VERSION }}`
+            - Kernel 版本: `${{ env.ANDROID_VERSION }}-${{ env.KERNEL_VERSION }}`
             - BuildTime 构建时间: `${{ steps.formatted_date.outputs.formatted }}`
           files: |
             ${{ env.WORKSPACE }}/AnyKernel3-*.zip
