@@ -56,6 +56,12 @@ on:
           - disable
         default: enable
 
+      KLEAF:
+        description: "使用 Bazel 构建内核镜像 // Building Android Kernels with Bazel"
+        required: true
+        type: boolean
+        default: false
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -283,7 +289,17 @@ jobs:
           fi
 
           echo "开始构建内核，构建类型：$BUILD_TYPE"
-          LTO=thin ./kernel_platform/oplus/build/oplus_build_kernel.sh "$CHIPSET" "$BUILD_TYPE" --jobs=$(nproc --all) || { echo "内核构建失败"; exit 1; }
+
+          if [ "${{ inputs.KLEAF }}" = "true" ]; then
+            cd "$PLATFORM"
+
+            SOURCE_DATE_EPOCH=$(date +%s) \
+            tools/bazel run --config=fast --config=stamp \
+              //common:kernel_aarch64_dist \
+              -- --dist_dir=out/dist || { echo "内核构建失败"; exit 1; }
+          else
+            LTO=thin ./kernel_platform/oplus/build/oplus_build_kernel.sh "$CHIPSET" "$BUILD_TYPE" --jobs=$(nproc --all) || { echo "内核构建失败"; exit 1; }
+          fi
 
       - name: Make AnyKernel3 # 制作 AnyKernel3
         run: |
@@ -294,7 +310,12 @@ jobs:
           git clone https://github.com/schqiushui/AnyKernel3-KernelSU-Next.git -b gki-2.0 --depth=1 && rm -rf ./AnyKernel3-KernelSU-Next/.git
 
           # Copy kernel
-          IMAGE_PATH=$(find "$PLATFORM/out" -name "Image")
+          if [ "${{ inputs.KLEAF }}" = "true" ]; then
+            IMAGE_PATH=$(find "$PLATFORM/out/dist" -name "Image")
+          else
+            IMAGE_PATH=$(find "$PLATFORM/out" -name "Image")
+          fi
+
           if [ -n "$IMAGE_PATH" ]; then
             cp "$IMAGE_PATH" "$WORKSPACE/AnyKernel3-KernelSU-Next/Image"
             cp "$IMAGE_PATH" "$WORKSPACE/image_output/Image"
@@ -303,6 +324,25 @@ jobs:
             echo "Image 文件未找到"
             exit 1
           fi
+
+          # Copy boot.img
+          if [ "${{ inputs.KLEAF }}" = "true" ]; then
+            BOOTIMG_PATH=$(find "$PLATFORM/out/dist" -name "boot.img")
+          else
+            BOOTIMG_PATH=$(find "$PLATFORM/out" -name "boot.img")
+          fi
+
+          if [ -n "$BOOTIMG_PATH" ]; then
+            cp "$BOOTIMG_PATH" "$WORKSPACE/image_output/boot.img"
+            echo "boot.img 文件已找到:$BOOTIMG_PATH"
+          else
+            echo "boot.img 文件未找到，已跳过复制"
+          fi
+
+      - name: Copy DTBO # 复制 dtbo
+        if: ${{ inputs.KLEAF == 'false' }}
+        run: |
+          cd "$WORKSPACE"
 
           # Copy dtbo.img
           if [[ "${{ env.KERNEL_VERSION }}" == "6.6" && ! "${{ inputs.FILE }}" =~ ^(oneplus_13t_v|oneplus_sm8750_v)$ ]]; then
@@ -315,15 +355,6 @@ jobs:
             else
                 echo "未找到任何 dtbo.img 文件"
             fi
-          fi
-
-          # Copy boot.img
-          BOOTIMG_PATH=$(find "$PLATFORM/out" -name "boot.img")
-          if [ -n "$BOOTIMG_PATH" ]; then
-            cp "$BOOTIMG_PATH" "$WORKSPACE/image_output/boot.img"
-            echo "boot.img 文件已找到:$BOOTIMG_PATH"
-          else
-            echo "boot.img 文件未找到，已跳过复制"
           fi
 
       - name: Apply patch_linux and replace Image # 应用 KPM patch_linux 并替换 Image
