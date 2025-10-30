@@ -6,7 +6,7 @@ on:
       SoC:
         description: "芯片型号 // SoC to build"
         required: true
-        default: 'sm8750'
+        default: 'mt6893'
 
       FILE:
         description: "配置文件名 // Configuration file name"
